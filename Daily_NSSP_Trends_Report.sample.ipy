@@ -1,0 +1,263 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Mar  4 12:23:28 2024
+
+@author: e261066
+"""
+
+import datetime as dt
+
+import keyring
+
+import requests
+import json
+
+import pandas as pd
+import numpy as np
+
+
+import os
+import base64
+import re
+import glob
+
+DIR_PROJECT = 'Location of Project'
+NSSP_Site_Number = 'SiteNum'
+
+
+
+#%% Keyring Authentication
+# dir(keyring)
+# keyring.set_password( 'NSSP ESSENCE', 'set username', 'This area for updating password', )
+NSSP_Login = keyring.get_credential("NSSP ESSENCE", None)
+ESSENCE_AUTH = requests.auth.HTTPBasicAuth(
+	NSSP_Login.username,
+	NSSP_Login.password,
+	)
+
+
+
+#%% Definitions
+
+# https://docs.python.org/3/library/datetime.html
+# date_start = '{date:%d}{date:%b}{date:%Y}'.format(date= dt.datetime.strptime('2022-11-02', '%Y-%m-%d') )
+# nssp_date = lambda x: '{date:%d}{date:%b}{date:%Y}'.format(date= dt.datetime.strptime(x, '%Y-%m-%d') )
+def nssp_date(value):
+	if type(pd.to_datetime(value)) == pd._libs.tslibs.timestamps.Timestamp:
+		return '{date:%d}{date:%b}{date:%Y}'.format(date = pd.to_datetime(value))
+	elif type(value) == str:
+		return '{date:%d}{date:%b}{date:%Y}'.format(date = dt.datetime.strptime(value, '%Y-%m-%d'))
+	elif type(value) == type(dt.datetime(2022, 1, 1)):
+		return '{date:%d}{date:%b}{date:%Y}'.format(date = value)
+	else:
+		return ValueError
+
+ref_date = pd.to_datetime(dt.datetime.now())
+
+
+
+#%% CCDD Category Checker
+# CCDD_Values = pd.DataFrame( json.loads(requests.get( 'https://essence.syndromicsurveillance.org/nssp_essence/api/datasources/va_er/fields/ccddCategory', auth = ESSENCE_AUTH, ).content)['values'] )['value'].to_list()
+
+CCDD_Descriptions_01 = requests.post(
+	'https://essence.syndromicsurveillance.org/nssp_essence/servlet/SyndromeDefinitionsServlet_CCDD',
+	data = {
+		'action': 'getCCDDTerms'
+		},
+	auth = ESSENCE_AUTH,
+	).json()
+CCDD_Descriptions_02 = pd.DataFrame(CCDD_Descriptions_01['categories']).set_index(['category', 'dateCreated', 'lastUpdate']).reset_index()
+
+for date_field in [ 'dateCreated', 'lastUpdate', ]: 
+	CCDD_Descriptions_02[date_field] = pd.Series(pd.to_datetime(CCDD_Descriptions_02[date_field])).dt.date
+
+new_CCDD_01 = CCDD_Descriptions_02.loc[ lambda x: (x['dateCreated'] >= (dt.date.today() - dt.timedelta(days = 28))) ]
+recent_CCDD_01 = CCDD_Descriptions_02.loc[
+	lambda x:
+		(x['lastUpdate'] >= (dt.date.today() - dt.timedelta(days = 28)))
+		& ~(x['dateCreated'] >= (dt.date.today() - dt.timedelta(days = 28)))
+	]
+
+
+
+#%% Symptoms
+
+# Chest Pain - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&ccCombo=%5ECHEST%20PAIN%5E&timeResolution=daily&medicalGroupingSystem=essencesyndromes&userId=704&site=866&aqtTarget=TimeSeries&stratVal=&multiStratVal=&graphOnly=true&numSeries=0&graphOptions=multipleSmall&seriesPerYear=false&startMonth=January&nonZeroComposite=false&graphTitle=Chest%20Pain&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=07Dec23&endDate=06Mar24
+# Abdominal Pain - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?medicalGrouping=abdominalpain&percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&timeResolution=daily&medicalGroupingSystem=chiefcomplaintsubsyndromes&userId=704&site=866&aqtTarget=TimeSeries&stratVal=&multiStratVal=&graphOnly=true&numSeries=0&graphOptions=multipleSmall&seriesPerYear=false&startMonth=January&nonZeroComposite=false&graphTitle=Abdominal%20Pain&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=07Dec23&endDate=06Mar24
+# Mental Health Related Visits to ED (5150) - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?percentParam=noPercent&patientClass=e&datasource=va_er&medicalGroupingSystem=chiefcomplaints&userId=704&site=866&aqtTarget=TimeSeries&ccddCategory=cdc%20mental%20health%20v1&geographySystem=region&detector=probrepswitch&timeResolution=daily&graphTitle=Mental%20Health%20Related%20Visits%20to%20ED%20(5150)&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=1Mar2021&endDate=23Jun2021
+
+
+Symptoms = pd.DataFrame([
+	{ 'graphTitle': 'Abdominal Pain', 'medicalGrouping': 'abdominalpain', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Chest Pain', 'ccCombo': '^CHEST PAIN^', 'medicalGroupingSystem': 'essencesyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Coughing', 'medicalGrouping': 'cough', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Fever', 'medicalGrouping': 'feverorchills', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Headache', 'medicalGrouping': 'headache', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'NVD', 'medicalGrouping': 'nvd', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Shortness of Breath', 'medicalGrouping': 'shortnessofbreath', 'medicalGroupingSystem': 'chiefcomplaintsubsyndromes', 'datasource': 'va_hosp', 'geographySystem': 'hospital', },
+	{ 'graphTitle': 'Mental Health Related Visits to ED (5150)', 'medicalGroupingSystem': 'chiefcomplaints', 'datasource': 'va_er', 'geographySystem': 'region', 'patientClass': 'e', 'ccddCategory': 'CDC Mental Health v1', },
+	])
+
+Raw_JSON = {}
+Tables = {}
+for idx, syndrome in Symptoms.iterrows():
+	request_params = {
+		**{
+		'startDate': (dt.datetime.now() - dt.timedelta(days = 90)).strftime('%d%b%y'),
+		'endDate':   (dt.datetime.now() - dt.timedelta(days =  1)).strftime('%d%b%y'),
+		'site': NSSP_Site_Number,
+		'detector': 'probrepswitch',
+		'aqtTarget': 'TimeSeries',
+		'timeResolution': 'daily',
+		},
+		**syndrome.T.dropna().to_dict(),
+		}
+	Tables[syndrome['graphTitle']] = pd.DataFrame(requests.get(
+		'https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries',
+		params = request_params,
+		auth = ESSENCE_AUTH,
+		).json()['timeSeriesData'])[[ 'date', 'count', 'expected', 'levels', 'color', ]]
+	Tables[syndrome['graphTitle']]['date'] = pd.Series(pd.to_datetime(Tables[syndrome['graphTitle']]['date'])).dt.date
+	
+	# https://htmlcolorcodes.com/rgb-to-hex/
+	Tables[syndrome['graphTitle']]['hex'] = np.where(
+		Tables[syndrome['graphTitle']]['color'] == 'red', '#FF0000',
+		np.where(
+			Tables[syndrome['graphTitle']]['color'] == 'blue', '#0000FF',
+			np.where(
+				Tables[syndrome['graphTitle']]['color'] == 'yellow', '#FFFF00',
+				None
+				)
+			)
+		)
+
+
+
+#%% Installations
+# !pip install seaborn
+# !pip install ipympl
+# !pip install mplcursors
+
+import seaborn as sns
+import matplotlib as mpl
+%matplotlib widget
+
+if False: # example
+	# Load an example dataset with long-form data
+	fmri = sns.load_dataset("fmri")
+
+	# Plot the responses for different events and regions
+	sns.lineplot(
+		x = "timepoint", y = "signal",
+		hue = "region", style = "event",
+		data = fmri
+		)
+
+
+
+#%% Plots
+for name, dataset in Tables.items():
+	#print(name)
+	plt = mpl.pyplot
+	fig, ax = plt.subplots(figsize=(6, 4), dpi = 2 ** 7)
+	if False:
+		dir(ax)
+	p1 = sns.lineplot(
+		data = dataset,
+		x = 'date', y = 'count',
+		ax = ax,
+		color = '#91bfeb',
+		zorder = 1,
+		)
+	p2 = sns.scatterplot(
+		data = dataset,
+		x = 'date', y = 'count',
+		ax = ax,
+		hue = 'color', palette = {'blue': '#91bfeb', 'red': '#fc4d59', 'yellow': '#efef0f'},
+		#size = 'size',
+		legend = False,
+		zorder = 2,
+		linewidth = 0,
+		)
+	
+	mdates = mpl.dates
+	fmt_monthly = mdates.MonthLocator(interval = 1)
+	fmt_weekly = mdates.DayLocator(interval = 7)
+	
+	ax.set_title(name)
+	plt.xlabel('Date')
+	ax.xaxis.set_major_locator(fmt_monthly)
+	# ax.xaxis.set_minor_locator(fmt_weekly)
+	
+	# https://www.w3schools.com/python/matplotlib_grid.asp
+	plt.grid(color = 'green', linestyle = '--', linewidth = 0.5, axis = 'x')
+	
+	plt.ylabel('ED Visits')
+	# ax.legend().remove()
+	
+	plt.savefig(DIR_PROJECT + r'\Images\\' + f'{name}')
+	# plt.show()
+
+
+
+#%% Generate Document
+# https://raphaelletseng.medium.com/getting-to-know-matplotlib-and-python-docx-5ee67bad38d2
+# https://python-docx.readthedocs.io/en/latest/index.html#user-guide
+# !pip install python-docx
+import docx
+from docx import Document
+from docx.shared import Inches
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+if False:
+	dir(Document().styles)
+	for style in Document().styles:
+		print(style)
+
+document = Document()
+
+Title_Style = document.styles['Title']
+Title_Style.font.name = 'Calibri'
+Title_Style.font.size = Pt(24)
+Title_Style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+document.add_heading("Riverside County Syndrome Update", 0) # Title
+
+document.add_heading("New CCDD Categories", 1) # Heading 1
+for idx, row in new_CCDD_01.sort_values(['lastUpdate'], ascending = [False]).iterrows():
+	document.add_paragraph(
+		f"""{row['category']} - {row['lastUpdate']:%Y-%m-%d}""",
+		#'first item in ordered list',
+		style='List Number',
+		)
+
+document.add_heading("Most Recent CCDD Category Updates", 1) # Heading 1
+for idx, row in recent_CCDD_01.sort_values(['lastUpdate'], ascending = [False]).iterrows():
+	document.add_paragraph(
+		f"""{row['category']} - {row['lastUpdate']:%Y-%m-%d}""",
+		#'first item in ordered list',
+		style='List Number',
+		)
+
+document.add_paragraph(f"""
+
+
+Disclaimer: This is an internal document and is using a data source that is considered preliminary. It is intended to be used for early surveillance monitoring purposes.
+
+It was generated on: {ref_date:%Y-%m-%d %H:%M}
+
+
+""")
+
+document.add_picture(DIR_PROJECT + r'Organization_Logo.jpg', width=Inches(3.00))
+
+# Center the previous item https://stackoverflow.com/a/28337901
+previous_item = document.paragraphs[-1]
+previous_item.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+document.add_page_break()
+
+for name, dataset in Tables.items():
+	document.add_picture(DIR_PROJECT + r'\Images\\' + f'{name}.png', width=Inches(6.00))
+
+document.save(DIR_PROJECT + 'Syndrome Report.docx')
