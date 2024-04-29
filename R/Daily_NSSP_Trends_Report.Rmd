@@ -1,0 +1,152 @@
+---
+title: "Sample NSSP Report"
+author: "Michael Castro"
+date: "2024-04-26"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+```{r Setup, message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+
+# DIR_PROJECT = 'Location of Project'
+# NSSP_Site_Number = 'SiteNum'
+DIR_PROJECT = 'Location of Project'
+NSSP_Site_Number = 'SiteNum'
+```
+
+```{r Keyring Authentication, message=FALSE, warning=FALSE, include=FALSE}
+Update_NSSP_Credentials <- function(){
+    oskeyring::windows_item_write(oskeyring::windows_item(
+        target_name = 'NSSP ESSENCE',
+        username = .rs.askForPassword("Please provide your NSSP username here:"),
+        credential_blob = .rs.askForPassword("Please provide your NSSP password here:"),
+        )
+        )
+}
+# Update_NSSP_Credentials() # Only run if you need to create or update your credential
+
+NSSP_Login <- oskeyring::windows_item_read('NSSP ESSENCE')
+
+ESSENCE_AUTH <- httr::authenticate(
+	user = NSSP_Login$username,
+	password = paste(rawToChar(NSSP_Login$credential_blob, multiple = TRUE), collapse = '')
+	)
+```
+
+```{r Definitions, message=FALSE, warning=FALSE, include=FALSE}
+nssp_date <- function(DATE_VAL) {
+    if (lubridate::is.Date(lubridate::as_date(lubridate::parse_date_time2(DATE_VAL, c('%Y-%m-%d', '%m-%d-%Y'))))) {
+    	date_value <- lubridate::as_date(lubridate::parse_date_time2(DATE_VAL, c('%Y-%m-%d', '%m-%d-%Y')))
+    	return(format(date_value,'%d%b%Y'))
+    } else if (lubridate::is.Date(DATE_VAL)) {
+        return(format(date_value,'%d%b%Y'))
+    } else {
+        return(stop("Not given a currently accepted date value"))
+    }
+}
+
+ref_date <- lubridate::now()
+
+```
+
+```{r CCDD Category Checker, message=FALSE, warning=FALSE, include=FALSE}
+CCDD_Descriptions_01 <- httr::POST(
+    'https://essence.syndromicsurveillance.org/nssp_essence/servlet/SyndromeDefinitionsServlet_CCDD',
+    ESSENCE_AUTH,
+    query = list('action' = 'getCCDDTerms')
+    ) %>%
+    httr::content(., as = "text") %>%
+    jsonlite::fromJSON() %>%
+    .$'categories' %>%
+    dplyr::mutate(
+        dateCreated = as.Date(.$dateCreated),
+        lastUpdate = as.Date(.$lastUpdate),
+    )
+
+
+new_CCDD_01 = CCDD_Descriptions_01 %>%
+    dplyr::filter( dateCreated >= (lubridate::today() - 28) )
+recent_CCDD_01 = CCDD_Descriptions_01 %>%
+    dplyr::filter(
+        (lastUpdate >= (lubridate::today() - 28))
+        & !(dateCreated >= (lubridate::today() - 28))
+    )
+
+```
+
+
+# Symptoms
+
+Chest Pain - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&ccCombo=%5ECHEST%20PAIN%5E&timeResolution=daily&medicalGroupingSystem=essencesyndromes&userId=704&site=866&aqtTarget=TimeSeries&stratVal=&multiStratVal=&graphOnly=true&numSeries=0&graphOptions=multipleSmall&seriesPerYear=false&startMonth=January&nonZeroComposite=false&graphTitle=Chest%20Pain&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=07Dec23&endDate=06Mar24
+Abdominal Pain - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?medicalGrouping=abdominalpain&percentParam=noPercent&geographySystem=hospital&datasource=va_hosp&detector=probrepswitch&timeResolution=daily&medicalGroupingSystem=chiefcomplaintsubsyndromes&userId=704&site=866&aqtTarget=TimeSeries&stratVal=&multiStratVal=&graphOnly=true&numSeries=0&graphOptions=multipleSmall&seriesPerYear=false&startMonth=January&nonZeroComposite=false&graphTitle=Abdominal%20Pain&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=07Dec23&endDate=06Mar24
+Mental Health Related Visits to ED (5150) - https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries?percentParam=noPercent&patientClass=e&datasource=va_er&medicalGroupingSystem=chiefcomplaints&userId=704&site=866&aqtTarget=TimeSeries&ccddCategory=cdc%20mental%20health%20v1&geographySystem=region&detector=probrepswitch&timeResolution=daily&graphTitle=Mental%20Health%20Related%20Visits%20to%20ED%20(5150)&xAxisLabel=&yAxisLabel=&yAxisLabelRight=&startDate=1Mar2021&endDate=23Jun2021
+
+```{r Symptoms, message=FALSE, warning=FALSE, include=FALSE}
+
+Symptoms = list(
+	list( 'graphTitle' = 'Abdominal Pain', 'medicalGrouping' = 'abdominalpain', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Chest Pain', 'ccCombo' = '^CHEST PAIN^', 'medicalGroupingSystem' = 'essencesyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Coughing', 'medicalGrouping' = 'cough', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Fever', 'medicalGrouping' = 'feverorchills', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Headache', 'medicalGrouping' = 'headache', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'NVD', 'medicalGrouping' = 'nvd', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Shortness of Breath', 'medicalGrouping' = 'shortnessofbreath', 'medicalGroupingSystem' = 'chiefcomplaintsubsyndromes', 'datasource' = 'va_hosp', 'geographySystem' = 'hospital' ),
+	list( 'graphTitle' = 'Mental Health Related Visits to ED (5150)', 'medicalGroupingSystem' = 'chiefcomplaints', 'datasource' = 'va_er', 'geographySystem' = 'region', 'patientClass' = 'e', 'ccddCategory' = 'CDC Mental Health v1' )
+	)
+
+
+Tables = list()
+
+for (syndrome in Symptoms) {
+    #print(syndrome[['graphTitle']])
+    #name = syndrome[['graphTitle']]
+    request_params = list(
+        startDate = format(lubridate::today() - lubridate::days(90), '%d%b%y'),
+        endDate = format(lubridate::today() - lubridate::days(1), '%d%b%y'),
+        site = NSSP_Site_Number,
+    	detector = 'probrepswitch',
+    	aqtTarget = 'TimeSeries',
+    	timeResolution = 'daily'
+        ) %>% append(syndrome)
+    Tables <- Tables %>%
+    append(
+        list(
+            name = httr::GET(
+                'https://essence.syndromicsurveillance.org/nssp_essence/api/timeSeries',
+                ESSENCE_AUTH,
+                query = request_params
+                ) %>%
+                httr::content(.) %>%
+                .$'timeSeriesData' %>%
+                jsonlite::toJSON(., auto_unbox = TRUE) %>%
+                jsonlite::fromJSON(.) %>%
+                mutate(
+                    hex = case_when(
+                        color == 'red' ~ '#FF0000',
+                        color == 'blue' ~ '#0000FF',
+                        color == 'yellow' ~ '#FFFF00',
+                        .defaut = NULL
+                    )
+                )
+            )
+        )
+
+    }
+
+names(Tables) <- map(Symptoms, ~.$graphTitle) %>% list() %>% .[[1]]
+
+```
+
+
+# Plots
+
+
+
+
+
