@@ -3,8 +3,8 @@
 Hello everyone and thank you for your interest in the presentation.
 
 WIP: There are a few items I want to expand upon, including:
-1. Updating the readme.
-2. Add sections for the first half of the paired R markdown script.
+1. Updating the readme. (Done)
+2. Add sections for the first half of the paired R markdown script. (Done)
 3. Re-format the python script section headers to be in parity with the R markdown script.
 4. Add a section to the readme on building queries in ESSENCE and then moving them to a script (e.g. R or python).
 5. Add sections for the latter half of the script that includes graphical generation and outputting to a docx document.
